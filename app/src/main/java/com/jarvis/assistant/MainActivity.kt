@@ -38,7 +38,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private val PREFS_NAME = "jarvis_prefs"
     private val KEY_API_KEY = "anthropic_api_key"
 
-    // Saari permissions jo humein chahiye
     private val requiredPermissions = arrayOf(
         Manifest.permission.RECORD_AUDIO,
         Manifest.permission.CALL_PHONE,
@@ -46,7 +45,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         Manifest.permission.READ_CONTACTS
     )
 
-    // Voice recognition result yahan aata hai
     private val speechLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -58,7 +56,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
     }
 
-    // Permission request result
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { granted ->
@@ -93,7 +90,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
     }
 
-    // ---- API key ko phone me hi save karna (SharedPreferences) ----
     private fun getApiKey(): String {
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         return prefs.getString(KEY_API_KEY, "") ?: ""
@@ -148,25 +144,45 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, null)
     }
 
-    // ---- Command samajhne aur execute karne ka core logic ----
+    // Ye kisi bhi contact naam ke saath kaam karta hai - alag se har naam ke liye
+    // command likhne ki zaroorat nahi. "Chaitanya ko call karo", "Gauri didi ko call karo",
+    // "Mummy ko call kro" - sab isi ek pattern se samajh jayega.
     private fun handleCommand(command: String) {
         val lower = command.lowercase(Locale.getDefault()).trim()
 
+        val whatsappRegex = Regex("whatsapp\\s*(?:par|pe|se)?\\s*(.+?)\\s*ko\\s*(.+?)\\s*(?:msg|message)\\s*(?:karo|kro|kar do|bhejo|bhej do)?\\s*$")
+        val whatsappMatch = whatsappRegex.find(lower)
+
+        val callRegex = Regex("(.+?)\\s*ko\\s*(?:phone|call)\\s*(?:karo|kro|kar do|laga do|lagao)?\\s*$")
+        val callMatch = callRegex.find(lower)
+
+        val smsRegex = Regex("(.+?)\\s*ko\\s*(?:message|msg)\\s*(?:karo|kro|kar do)?\\s*(.+)$")
+        val smsMatch = smsRegex.find(lower)
+
         when {
-            // Fast path: seedha "call <naam>" jaisa clear command
-            lower.startsWith("call ") || lower.contains("ko call") -> {
-                val name = extractName(lower, listOf("call ", "ko call karo", "ko call kro"))
+            lower.contains("whatsapp") && whatsappMatch != null -> {
+                val name = whatsappMatch.groupValues[1].trim()
+                val text = whatsappMatch.groupValues[2].trim()
+                sendWhatsAppMessage(name, text)
+            }
+
+            lower.startsWith("call ") || callMatch != null -> {
+                val name = if (callMatch != null) callMatch.groupValues[1].trim()
+                           else lower.removePrefix("call ").trim()
                 makeCall(name)
             }
 
-            // Fast path: seedha "message <naam> <text>" jaisa clear command
-            lower.startsWith("message ") || lower.contains("ko message") || lower.contains("send message") -> {
-                val (name, msgBody) = extractMessageParts(lower)
-                sendSms(name, msgBody)
+            lower.startsWith("message ") || smsMatch != null -> {
+                if (smsMatch != null) {
+                    val name = smsMatch.groupValues[1].trim()
+                    val text = smsMatch.groupValues[2].trim()
+                    sendSms(name, text)
+                } else {
+                    val (name, msgBody) = extractMessageParts(lower)
+                    sendSms(name, msgBody)
+                }
             }
 
-            // Baaki har tarah ke natural bolne ka style -> Claude AI se samjhwao
-            // jaise: "yaar Rahul ko bata do main aa raha hoon" ya "mummy ko phone laga do"
             else -> {
                 if (getApiKey().isBlank()) {
                     speak("Samajh nahi aaya, aur API key bhi set nahi hai. Settings me key daalo.")
@@ -178,7 +194,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
     }
 
-    // ---- Claude API se natural language command ko structured action me convert karwana ----
     private fun askClaude(userCommand: String) {
         val apiKey = getApiKey()
         val systemPrompt = """
@@ -230,7 +245,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                         }
                         val contentArray = outer.getJSONArray("content")
                         val rawText = contentArray.getJSONObject(0).getString("text").trim()
-                        // Kabhi kabhi model ```json fences bhi de sakta hai, unko hata dete hain
                         val cleaned = rawText.replace("```json", "").replace("```", "").trim()
                         val parsed = JSONObject(cleaned)
 
@@ -259,7 +273,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         return result.trim()
     }
 
-    // "message rahul batao main aa raha hoon" -> name=rahul, body="batao main aa raha hoon"
     private fun extractMessageParts(text: String): Pair<String, String> {
         var cleaned = text
             .replace("send message to", "")
@@ -339,9 +352,50 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
     }
 
+    private fun sendWhatsAppMessage(name: String, body: String) {
+        val number = findNumberByName(name)
+        if (number == null) {
+            speak("$name naam ka contact nahi mila.")
+            return
+        }
+        if (body.isBlank()) {
+            speak("Message me kya likhna hai wo bolo.")
+            return
+        }
+        try {
+            var cleanNumber = number.replace(Regex("[^0-9+]"), "")
+            if (!cleanNumber.startsWith("+")) {
+                if (cleanNumber.length == 10) {
+                    cleanNumber = "91$cleanNumber"
+                } else if (cleanNumber.startsWith("0")) {
+                    cleanNumber = "91${cleanNumber.substring(1)}"
+                }
+            } else {
+                cleanNumber = cleanNumber.removePrefix("+")
+            }
+
+            val encodedText = Uri.encode(body)
+            val uri = Uri.parse("https://wa.me/$cleanNumber?text=$encodedText")
+            val intent = Intent(Intent.ACTION_VIEW, uri)
+            intent.setPackage("com.whatsapp")
+            startActivity(intent)
+            speak("$name ke liye WhatsApp khol diya, message likha hua hai, Send dabao.")
+        } catch (e: Exception) {
+            try {
+                var cleanNumber = number.replace(Regex("[^0-9+]"), "")
+                val encodedText = Uri.encode(body)
+                val uri = Uri.parse("https://wa.me/$cleanNumber?text=$encodedText")
+                startActivity(Intent(Intent.ACTION_VIEW, uri))
+                speak("$name ke liye WhatsApp khol diya, message likha hua hai, Send dabao.")
+            } catch (e2: Exception) {
+                speak("WhatsApp kholne me error aaya. Shayad WhatsApp install nahi hai.")
+            }
+        }
+    }
+
     override fun onDestroy() {
         tts.stop()
         tts.shutdown()
         super.onDestroy()
     }
-}
+}w
