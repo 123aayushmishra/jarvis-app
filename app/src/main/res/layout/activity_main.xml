@@ -28,7 +28,7 @@
         android:layout_marginBottom="24dp"
         android:background="#141B2D"
         android:padding="16dp"
-        android:text="Mic dabao aur bolo:\n\"Call Mummy\"\n\"Message Rahul batao main aa raha hoon\""
+        android:text="Mic dabao aur bolo:\n&quot;Call Mummy&quot;\n&quot;Message Rahul batao main aa raha hoon&quot;"
         android:textColor="#C7D0E0"
         android:textSize="16sp"
         app:layout_constraintTop_toBottomOf="@id/titleText"
